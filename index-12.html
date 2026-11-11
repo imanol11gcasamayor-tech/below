@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Below">
+<meta name="theme-color" content="#111111">
+<title>Below</title>
+<style>
+:root{color-scheme:dark;--bg:#111;--fg:#f2f2f2;--ac:#e0b341;--card:#1d1d1d;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,sans-serif;overscroll-behavior:none}
+#setup{max-width:420px;margin:0 auto;padding:24px}
+h1{margin:0 0 6px}
+p{color:#bbb;line-height:1.45}
+label{display:block;margin:16px 0 6px;font-weight:600}
+select,input[type=file]{width:100%;padding:12px;font-size:16px;background:var(--card);color:var(--fg);border:1px solid #444;border-radius:10px;box-sizing:border-box}
+input[type=range]{width:100%}
+.row{display:flex;gap:10px}
+.chk{display:flex;gap:10px;align-items:center;font-weight:400}
+button{width:100%;margin-top:24px;padding:16px;font-size:18px;font-weight:700;background:var(--ac);color:#111;border:0;border-radius:12px}
+#stage{display:none;position:fixed;inset:0;background:#000}
+canvas{width:100%;height:100%;display:block}
+video{display:none}
+#err{color:#ff8a80;margin-top:12px}
+details{margin-top:20px;background:var(--card);border-radius:10px;padding:12px 14px}
+summary{font-weight:600}
+</style>
+</head>
+<body>
+<div id="setup">
+  <h1>Below</h1>
+  <p>Móvil apoyado. La carta entra por la parte de abajo de la pantalla: la app engancha las esquinas superiores, deduce el tamaño de la carta y la sigue. Al sacarla hacia un lado, la carta falsa se desvanece progresivamente.</p>
+  <label>Carta falsa</label>
+  <div class="row">
+    <select id="rank"></select>
+    <select id="suit"><option>♠</option><option>♥</option><option>♦</option><option>♣</option></select>
+  </div>
+  <label>…o sube una foto de tu carta falsa (opcional)</label>
+  <input type="file" id="file" accept="image/*">
+  <label>Tamaño inicial de la carta: <span id="szv">70</span>% de la altura de pantalla</label>
+  <input type="range" id="size" min="30" max="120" value="70">
+  <label>La carta sale por…</label>
+  <select id="dir"><option value="left">La izquierda (de la pantalla)</option><option value="right">La derecha (de la pantalla)</option></select>
+  <label>Detección</label>
+  <select id="mode">
+    <option value="light">Carta clara (cara blanca)</option>
+    <option value="any">Cualquier objeto que se mueva</option>
+  </select>
+  <label>Orientación de la carta falsa</label>
+  <select id="flip"><option value="0">Normal</option><option value="1">Girada 180°</option></select>
+  <label class="chk"><input type="checkbox" id="dbg" checked> Modo ensayo (muestra lo que detecta)</label>
+  <button id="go">Iniciar</button>
+  <div id="err"></div>
+  <details>
+    <summary>Cómo usarla</summary>
+    <p>1. Apoya el móvil y pulsa Iniciar. Deja la cámara libre 2 segundos (calibra el fondo).<br>
+    2. Sube la carta desde abajo: que se vean las dos esquinas superiores, con la carta algo vertical.<br>
+    3. Súbela y llévala hacia el lado de salida: con las 4 esquinas a la vista empieza a desvanecerse la carta falsa.<br>
+    4. Cuando desaparece del todo, la segunda pasada muestra la carta real.<br>
+    5. Esquina superior izquierda: reinicio. Desmarca el modo ensayo para actuar.</p>
+  </details>
+  <details>
+    <summary>Añadir a la pantalla de inicio</summary>
+    <p><b>iPhone (Safari):</b> Compartir → «Añadir a pantalla de inicio».<br><b>Android (Chrome):</b> menú ⋮ → «Instalar app».</p>
+  </details>
+</div>
+<div id="stage"><canvas id="c"></canvas></div>
+<video id="v" playsinline muted></video>
+<script>
+(function(){
+  try{
+    var ic=document.createElement('canvas');ic.width=ic.height=192;
+    var x=ic.getContext('2d');
+    x.fillStyle='#111';x.fillRect(0,0,192,192);
+    x.fillStyle='#fff';x.beginPath();x.roundRect(56,28,80,136,10);x.fill();
+    x.fillStyle='#c62828';x.font='bold 56px Georgia,serif';x.textAlign='center';x.textBaseline='middle';
+    x.fillText('♥',96,96);
+    var url=ic.toDataURL('image/png');
+    var l=document.createElement('link');l.rel='apple-touch-icon';l.href=url;document.head.appendChild(l);
+    var m={name:'Below',short_name:'Below',display:'standalone',orientation:'portrait',background_color:'#111111',theme_color:'#111111',start_url:location.href.split('#')[0],icons:[{src:url,sizes:'192x192',type:'image/png'}]};
+    var ml=document.createElement('link');ml.rel='manifest';
+    ml.href=URL.createObjectURL(new Blob([JSON.stringify(m)],{type:'application/manifest+json'}));
+    document.head.appendChild(ml);
+  }catch(e){}
+})();
+
+var $=function(i){return document.getElementById(i);};
+['A','2','3','4','5','6','7','8','9','10','J','Q','K'].forEach(function(r){var o=document.createElement('option');o.textContent=r;$('rank').appendChild(o);});
+$('rank').value='K';
+$('size').oninput=function(){$('szv').textContent=this.value;};
+var userImg=null;
+$('file').onchange=function(e){
+  var f=e.target.files[0];if(!f)return;
+  var im=new Image();im.onload=function(){userImg=im;};im.src=URL.createObjectURL(f);
+};
+
+var video=$('v'),cv=$('c'),ctx=cv.getContext('2d');
+var sm=document.createElement('canvas'),sctx=sm.getContext('2d',{willReadFrequently:true});
+var dbc=document.createElement('canvas'),dctx=dbc.getContext('2d');
+var AW=128,AH=96,N=AW*AH,base=null,state='idle',hits=0,clear=0,warm=0;
+var T={x:0,y:0,h:0,th:0,alpha:1,init:false};
+var info='';
+var RAT=0.714;
+
+function drawCard(w,h,rank,suit){
+  if(userImg){ctx.drawImage(userImg,-w/2,-h/2,w,h);return;}
+  var red=(suit==='♥'||suit==='♦'),col=red?'#c62828':'#111';
+  ctx.save();ctx.translate(-w/2,-h/2);
+  ctx.fillStyle='#fff';ctx.beginPath();ctx.roundRect(0,0,w,h,w*0.06);ctx.fill();
+  ctx.strokeStyle='#bbb';ctx.lineWidth=Math.max(1,w*0.008);ctx.stroke();
+  ctx.fillStyle=col;ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.font='bold '+(w*0.17)+'px Georgia,serif';ctx.fillText(rank,w*0.14,h*0.07);
+  ctx.font=(w*0.15)+'px Georgia,serif';ctx.fillText(suit,w*0.14,h*0.14);
+  ctx.font=(w*0.55)+'px Georgia,serif';ctx.fillText(suit,w/2,h/2);
+  ctx.translate(w,h);ctx.rotate(Math.PI);
+  ctx.font='bold '+(w*0.17)+'px Georgia,serif';ctx.fillText(rank,w*0.14,h*0.07);
+  ctx.font=(w*0.15)+'px Georgia,serif';ctx.fillText(suit,w*0.14,h*0.14);
+  ctx.restore();
+}
+
+// Apertura morfológica 3x3: quita dedos finos y ruido, conserva lo pegado al borde
+function opening(mask){
+  var e=new Uint8Array(N),o=new Uint8Array(N),x,y,i,dx,dy,ok;
+  for(y=0;y<AH;y++)for(x=0;x<AW;x++){
+    i=y*AW+x;if(!mask[i])continue;ok=1;
+    for(dy=-1;dy<=1&&ok;dy++)for(dx=-1;dx<=1;dx++){
+      var xx=x+dx,yy=y+dy;
+      if(xx<0||yy<0||xx>=AW||yy>=AH)continue;
+      if(!mask[yy*AW+xx]){ok=0;break;}
+    }
+    e[i]=ok;
+  }
+  for(y=0;y<AH;y++)for(x=0;x<AW;x++){
+    i=y*AW+x;
+    if(e[i]){for(dy=-1;dy<=1;dy++)for(dx=-1;dx<=1;dx++){
+      var xx=x+dx,yy=y+dy;if(xx>=0&&yy>=0&&xx<AW&&yy<AH)o[yy*AW+xx]=1;}}
+  }
+  return o;
+}
+
+function largest(mask){
+  var seen=new Uint8Array(N),best=[],st=[];
+  for(var s=0;s<N;s++){
+    if(!mask[s]||seen[s])continue;
+    var comp=[];st.length=0;st.push(s);seen[s]=1;
+    while(st.length){
+      var p=st.pop();comp.push(p);
+      var px=p%AW,py=(p/AW)|0;
+      if(px>0&&mask[p-1]&&!seen[p-1]){seen[p-1]=1;st.push(p-1);}
+      if(px<AW-1&&mask[p+1]&&!seen[p+1]){seen[p+1]=1;st.push(p+1);}
+      if(py>0&&mask[p-AW]&&!seen[p-AW]){seen[p-AW]=1;st.push(p-AW);}
+      if(py<AH-1&&mask[p+AW]&&!seen[p+AW]){seen[p+AW]=1;st.push(p+AW);}
+    }
+    if(comp.length>best.length)best=comp;
+  }
+  return best;
+}
+
+// Rectángulo de área mínima con la carta casi vertical (-45°..45°)
+function fit(comp){
+  var best=null,n=comp.length,minx=1e9,maxx=-1,miny=1e9,maxy=-1,i;
+  var xs=new Float32Array(n),ys=new Float32Array(n);
+  for(i=0;i<n;i++){xs[i]=comp[i]%AW;ys[i]=(comp[i]/AW)|0;
+    if(xs[i]<minx)minx=xs[i];if(xs[i]>maxx)maxx=xs[i];if(ys[i]<miny)miny=ys[i];if(ys[i]>maxy)maxy=ys[i];}
+  for(var deg=-45;deg<=45;deg+=3){
+    var t=deg*Math.PI/180,ux=Math.sin(t),uy=-Math.cos(t),vx=Math.cos(t),vy=Math.sin(t);
+    var u0=1e9,u1=-1e9,v0=1e9,v1=-1e9;
+    for(i=0;i<n;i++){
+      var pu=xs[i]*ux+ys[i]*uy,pv=xs[i]*vx+ys[i]*vy;
+      if(pu<u0)u0=pu;if(pu>u1)u1=pu;if(pv<v0)v0=pv;if(pv>v1)v1=pv;
+    }
+    var area=(u1-u0+1)*(v1-v0+1)*(1+0.25*Math.abs(deg*Math.PI/180-T.th)/0.785);
+    if(!best||area<best.area)best={area:area,th:t,ux:ux,uy:uy,vx:vx,vy:vy,u0:u0,u1:u1,v0:v0,v1:v1};
+  }
+  best.minx=minx;best.maxx=maxx;best.miny=miny;best.maxy=maxy;
+  return best;
+}
+
+function track(comp){
+  var f=fit(comp),m=1;
+  var L=f.minx<=m,R=f.maxx>=AW-1-m,Tp=f.miny<=m,B=f.maxy>=AH-1-m;
+  var wE=f.v1-f.v0+1,hE=f.u1-f.u0+1,hm=null;
+  if(!L&&!R&&!Tp&&!B)hm=(hE+wE/RAT)/2;
+  else if((B||Tp)&&!L&&!R&&!(B&&Tp))hm=wE/RAT;
+  else if((L||R)&&!Tp&&!B)hm=hE;
+  if(hm!==null){
+    hm=Math.min(Math.max(hm,AH*0.1),AH*1.8);
+    T.h+=(hm-T.h)*(T.first?0.9:0.3);T.first=false;
+  }
+  if(comp.length>N*0.01)T.th+=(f.th-T.th)*0.6;
+  var w=RAT*T.h,uc,vc;
+  if(B&&!Tp)uc=f.u1-T.h/2;else if(Tp&&!B)uc=f.u0+T.h/2;else uc=(f.u0+f.u1)/2;
+  if(L&&!R)vc=f.v1-w/2;else if(R&&!L)vc=f.v0+w/2;else vc=(f.v0+f.v1)/2;
+  var cx=f.ux*uc+f.vx*vc,cy=f.uy*uc+f.vy*vc;
+  if(!T.init){T.x=cx;T.y=cy;T.init=true;}
+  else{T.x+=(cx-T.x)*0.8;T.y+=(cy-T.y)*0.8;}
+  // Desvanecimiento progresivo al sacar la carta hacia el lado elegido
+  var dir=$('dir').value,left=dir==='left';
+  var fadeOn=!B&&!Tp&&(!(L||R)||(left?L:R));
+  if(fadeOn){
+    var fx=T.x/AW;
+    var tgt=left?(fx-0.05)/0.4:(0.95-fx)/0.4;
+    tgt=Math.min(1,Math.max(0,tgt));
+    T.alpha=Math.max(tgt,T.alpha-0.07);
+  }
+  info=(B?'↓abajo ':'')+(Tp?'↑arriba ':'')+(L?'←izq ':'')+(R?'der→ ':'')+(!L&&!R&&!Tp&&!B?'4 esquinas ':'')+'α'+T.alpha.toFixed(2);
+}
+
+function loop(){
+  var W=cv.width,H=cv.height,vw=video.videoWidth,vh=video.videoHeight;
+  if(vw){
+    var s=Math.max(W/vw,H/vh),dw=vw*s,dh=vh*s;
+    ctx.save();ctx.translate(W,0);ctx.scale(-1,1);
+    ctx.drawImage(video,(W-dw)/2,(H-dh)/2,dw,dh);ctx.restore();
+    sctx.drawImage(cv,0,0,AW,AH);
+    var d=sctx.getImageData(0,0,AW,AH).data,mask=new Uint8Array(N),i,raw=0,cnt=0;
+    var light=$('mode').value==='light';
+    if(!base){base=new Float32Array(N*3);for(i=0;i<N;i++){base[i*3]=d[i*4];base[i*3+1]=d[i*4+1];base[i*3+2]=d[i*4+2];}}
+    for(i=0;i<N;i++){
+      var r=d[i*4],g=d[i*4+1],b=d[i*4+2];
+      var df=Math.abs(r-base[i*3])+Math.abs(g-base[i*3+1])+Math.abs(b-base[i*3+2]);
+      if(df>80){
+        raw++;
+        var cr=128+0.5*r-0.4187*g-0.0813*b,cb=128-0.1687*r-0.3313*g+0.5*b;
+        var skin=cr>=133&&cr<=173&&cb>=77&&cb<=127,ok=true;
+        if(light){var mx=Math.max(r,g,b),mn=Math.min(r,g,b);ok=mx>125&&(mx-mn)<0.35*mx;}
+        if(!skin&&ok){mask[i]=1;cnt++;}
+      }
+    }
+    var rate=warm<45?0.25:0.03;
+    if(raw/N<0.01)for(i=0;i<N;i++){base[i*3]+=(d[i*4]-base[i*3])*rate;base[i*3+1]+=(d[i*4+1]-base[i*3+1])*rate;base[i*3+2]+=(d[i*4+2]-base[i*3+2])*rate;}
+    warm++;
+    var comp=[],area=0;
+    if(cnt>N*0.004){comp=largest(opening(mask));area=comp.length/N;}
+    info='';
+    if(state==='idle'&&warm>45){
+      if(area>0.01){if(++hits>=2){state='track';clear=0;T.init=false;T.alpha=1;T.first=true;T.th=0;T.h=parseInt($('size').value)/100*AH;}}else hits=0;
+    }
+    var live=false;
+    if(state==='track'){
+      if(area>0.005){clear=0;track(comp);live=true;if(T.alpha<=0.02)state='done';}
+      else if(++clear>8)state='done';
+    }
+    if($('dbg').checked){
+      dbc.width=AW;dbc.height=AH;
+      var im=dctx.createImageData(AW,AH);
+      for(i=0;i<N;i++)if(mask[i]){im.data[i*4+1]=255;im.data[i*4+3]=90;}
+      for(i=0;i<comp.length;i++){var q=comp[i]*4;im.data[q]=255;im.data[q+1]=0;im.data[q+2]=255;im.data[q+3]=130;}
+      dctx.putImageData(im,0,0);
+      ctx.imageSmoothingEnabled=false;ctx.drawImage(dbc,0,0,W,H);ctx.imageSmoothingEnabled=true;
+    }
+    if(state==='track'&&live&&T.init){
+      var kx=W/AW,ky=H/AH,h=T.h*kx*1.04,w=h*RAT;
+      ctx.save();
+      ctx.translate(T.x*kx,T.y*ky);
+      ctx.rotate(T.th+($('flip').value==='1'?Math.PI:0));
+      ctx.globalAlpha=Math.max(0,T.alpha);
+      drawCard(w,h,$('rank').value,$('suit').value);
+      ctx.restore();
+      if($('dbg').checked){
+        ctx.save();ctx.translate(T.x*kx,T.y*ky);ctx.rotate(T.th);
+        ctx.strokeStyle='#0ff';ctx.lineWidth=2;ctx.strokeRect(-w/2,-h/2,w,h);
+        ctx.fillStyle='#0ff';
+        [[-1,-1],[1,-1],[1,1],[-1,1]].forEach(function(c){ctx.beginPath();ctx.arc(c[0]*w/2,c[1]*h/2,6,0,7);ctx.fill();});
+        ctx.restore();
+      }
+    }
+    if($('dbg').checked){
+      ctx.fillStyle='#ff0';ctx.font='14px system-ui';ctx.textAlign='left';ctx.textBaseline='top';
+      ctx.fillText((warm<=45?'calibrando… ':state)+' '+Math.round(area*100)+'% '+info,80,10);
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+function resize(){
+  cv.width=innerWidth;cv.height=innerHeight;
+  AH=Math.max(8,Math.round(AW*cv.height/cv.width));N=AW*AH;
+  sm.width=AW;sm.height=AH;base=null;warm=0;
+}
+addEventListener('resize',resize);
+cv.addEventListener('pointerdown',function(e){
+  if(e.clientX<70&&e.clientY<70){state='idle';hits=0;T.init=false;base=null;warm=0;}
+});
+
+$('go').onclick=function(){
+  navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},audio:false}).then(function(st){
+    video.srcObject=st;video.play();
+    $('setup').style.display='none';
+    $('stage').style.display='block';
+    try{navigator.wakeLock.request('screen');}catch(e){}
+    resize();loop();
+  }).catch(function(){
+    $('err').textContent='No se pudo abrir la cámara. Concede el permiso o abre el enlace en el navegador del móvil.';
+  });
+};
+</script>
+</body>
+</html>
